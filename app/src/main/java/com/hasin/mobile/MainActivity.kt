@@ -7,6 +7,7 @@ import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -104,7 +106,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val db = HasinDatabase.getInstance(this)
-        val repository = AppScannerRepository(applicationContext, db.scannedAppDao())
+        val repository = AppScannerRepository(applicationContext, db)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -157,16 +159,22 @@ fun DashboardScreen(viewModel: HasinViewModel, navController: NavController) {
     val total by viewModel.totalCount.collectAsState()
     val avg by viewModel.averageScore.collectAsState()
     val high by viewModel.highRiskCount.collectAsState()
-    val scanning by viewModel.isScanning
+    
+    // التصحيح: استخدام = بدلاً من by لأن isScanning هو Boolean
+    val scanning = viewModel.isScanning
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("حصين", fontWeight = FontWeight.Bold) },
                 actions = {
+                    // الآن العامل ! سيعمل بشكل صحيح
                     IconButton(onClick = { viewModel.scan() }, enabled = !scanning) {
-                        if (scanning) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.Refresh, contentDescription = "إعادة فحص")
+                        if (scanning) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "إعادة فحص")
+                        }
                     }
                 }
             )
@@ -257,7 +265,7 @@ fun NetworkMonitorScreen(
             ) {
                 Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = if (isVpnRunning) Icons.Default.Shield else Icons.Default.ShieldOutlined,
+                        imageVector = if (isVpnRunning) Icons.Default.Shield else Icons.Outlined.Shield,
                         contentDescription = null,
                         tint = if (isVpnRunning) Color(0xFF69F0AE) else MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -286,11 +294,7 @@ fun NetworkMonitorScreen(
                                     Text("${conn.destIp}:${conn.destPort}", fontWeight = FontWeight.Medium)
                                     Text("${conn.protocol} • ${conn.reason}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Text(
-                                    text = formatTime(conn.timestamp),
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Text(formatTime(conn.timestamp), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -369,10 +373,7 @@ fun AppDetailsScreen(viewModel: HasinViewModel, packageName: String, navControll
             return@Scaffold
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = scoreColor(app.threatScore).copy(alpha = 0.15f))) {
                     Column(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {

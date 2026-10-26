@@ -4,41 +4,41 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import com.hasin.mobile.core.ThreatScoreEngine
-import com.hasin.mobile.data.dao.ScannedAppDao
+import com.hasin.mobile.data.entity.NetworkConnectionEntity
 import com.hasin.mobile.data.entity.ScannedAppEntity
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
 
 class AppScannerRepository(
     private val context: Context,
-    private val dao: ScannedAppDao
+    private val database: HasinDatabase
 ) {
     private val packageManager: PackageManager = context.packageManager
+    private val scannedAppDao = database.scannedAppDao()
+    private val networkDao = database.networkConnectionDao()
 
-    fun getAllApps(): Flow<List<ScannedAppEntity>> = dao.getAllAppsByRisk()
-    fun getTotalCount(): Flow<Int> = dao.getTotalCount()
-    fun getAverageScore(): Flow<Double> = dao.getAverageScore()
-    fun getHighRiskCount(): Flow<Int> = dao.getHighRiskCount()
-    fun getMediumRiskCount(): Flow<Int> = dao.getMediumRiskCount()
-    fun getLowRiskCount(): Flow<Int> = dao.getLowRiskCount()
-    fun getWorsenedCount(): Flow<Int> = dao.getWorsenedCount()
+    fun getAllApps(): Flow<List<ScannedAppEntity>> = scannedAppDao.getAllAppsByRisk()
+    fun getTotalCount(): Flow<Int> = scannedAppDao.getTotalCount()
+    fun getAverageScore(): Flow<Double> = scannedAppDao.getAverageScore()
+    fun getHighRiskCount(): Flow<Int> = scannedAppDao.getHighRiskCount()
+    fun getMediumRiskCount(): Flow<Int> = scannedAppDao.getMediumRiskCount()
+    fun getLowRiskCount(): Flow<Int> = scannedAppDao.getLowRiskCount()
+    fun getWorsenedCount(): Flow<Int> = scannedAppDao.getWorsenedCount()
+    
+    // الإضافة الجديدة المطلوبة
+    fun getRecentConnections(): Flow<List<NetworkConnectionEntity>> = networkDao.getRecentConnections()
 
     suspend fun scanAllApps() {
-        val installedApps = packageManager.getInstalledApplications(
-            PackageManager.GET_PERMISSIONS
-        )
+        val installedApps = packageManager.getInstalledApplications(PackageManager.GET_PERMISSIONS)
 
         for (appInfo in installedApps) {
             try {
-                val packageInfo = packageManager.getPackageInfo(
-                    appInfo.packageName,
-                    PackageManager.GET_PERMISSIONS
-                )
+                val packageInfo = packageManager.getPackageInfo(appInfo.packageName, PackageManager.GET_PERMISSIONS)
                 val evaluation = ThreatScoreEngine.evaluate(packageInfo)
                 val appName = appInfo.loadLabel(packageManager).toString()
                 val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
 
-                val previous = dao.getApp(appInfo.packageName)
+                val previous = scannedAppDao.getApp(appInfo.packageName)
                 val previousScore = previous?.threatScore
                 val trend = when {
                     previousScore == null -> 0
@@ -63,7 +63,7 @@ class AppScannerRepository(
                     previousScore = previousScore,
                     scoreTrend = trend
                 )
-                dao.upsert(entity)
+                scannedAppDao.upsert(entity)
             } catch (e: Exception) {
                 continue
             }
