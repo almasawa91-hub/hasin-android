@@ -4,32 +4,75 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import com.hasin.mobile.core.ThreatScoreEngine
+import com.hasin.mobile.data.dao.ScannedAppDao
+import com.hasin.mobile.data.entity.ScannedAppEntity
+import kotlinx.coroutines.flow.Flow
+import org.json.JSONArray
 
-class AppScannerRepository(private val context: Context) {
+class AppScannerRepository(
+    private val context: Context,
+    private val dao: ScannedAppDao
+) {
+    private val packageManager: PackageManager = context.packageManager
 
-    fun getInstalledApps(): List<ThreatScoreEngine.AppThreatResult> {
-        val packageManager = context.packageManager
-        val installedPackages = packageManager.getInstalledApplications(PackageManager.GET_PERMISSIONS)
-        
-        val results = mutableListOf<ThreatScoreEngine.AppThreatResult>()
+    fun getAllApps(): Flow<List<ScannedAppEntity>> = dao.getAllAppsByRisk()
+    fun getTotalCount(): Flow<Int> = dao.getTotalCount()
+    fun getAverageScore(): Flow<Double> = dao.getAverageScore()
+    fun getHighRiskCount(): Flow<Int> = dao.getHighRiskCount()
+    fun getMediumRiskCount(): Flow<Int> = dao.getMediumRiskCount()
+    fun getLowRiskCount(): Flow<Int> = dao.getLowRiskCount()
+    fun getWorsenedCount(): Flow<Int> = dao.getWorsenedCount()
 
-        for (appInfo in installedPackages) {
-            // تجاهل تطبيقات النظام الأساسية لتقليل الضوضاء في النسخة الأولى (اختياري)
-            // if ((appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0) continue
+    suspend fun scanAllApps() {
+        val installedApps = packageManager.getInstalledApplications(
+            PackageManager.GET_PERMISSIONS
+        )
 
-            val appName = appInfo.loadLabel(packageManager).toString()
-            
+        for (appInfo in installedApps) {
             try {
-                val packageInfo = packageManager.getPackageInfo(appInfo.packageName, PackageManager.GET_PERMISSIONS)
-                val threatResult = ThreatScoreEngine.evaluate(packageInfo, appName)
-                results.add(threatResult)
-            } catch (e: PackageManager.NameNotFoundException) {
-                // تجاهل الحزم التي لا يمكن قراءة معلوماتها
+                val packageInfo = packageManager.getPackageInfo(
+                    appInfo.packageName,
+                    PackageManager.GET_PERMISSIONS
+                )
+                val evaluation = ThreatScoreEngine.evaluate(packageInfo)
+                val appName = appInfo.loadLabel(packageManager).toString()
+                val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+
+                val previous = dao.getApp(appInfo.packageName)
+                val previousScore = previous?.threatScore
+                val trend = when {
+                    previousScore == null -> 0
+                    evaluation.score > previousScore -> 1
+                    evaluation.score < previousScore -> -1
+                    else -> 0
+                }
+
+                val entity = ScannedAppEntity(
+                    packageName = appInfo.packageName,
+                    appName = appName,
+                    versionName = packageInfo.versionName ?: "unknown",
+                    versionCode = packageInfo.longVersionCode,
+                    isSystemApp = isSystem,
+                    installTime = packageInfo.firstInstallTime,
+                    updateTime = packageInfo.lastUpdateTime,
+                    threatScore = evaluation.score,
+                    highRiskPermissions = evaluation.highRiskPermissions.toJson(),
+                    mediumRiskPermissions = evaluation.mediumRiskPermissions.toJson(),
+                    totalPermissions = evaluation.totalPermissions,
+                    lastScannedAt = System.currentTimeMillis(),
+                    previousScore = previousScore,
+                    scoreTrend = trend
+                )
+                dao.upsert(entity)
+            } catch (e: Exception) {
                 continue
             }
         }
+    }
 
-        // ترتيب النتائج حسب درجة الخطر (الأعلى خطراً أولاً)
-        return results.sortedByDescending { it.score }
+    private fun List<String>.toJson(): String {
+        val arr = JSONArray()
+        forEach { arr.put(it) }
+        return arr.toString()
     }
 }
