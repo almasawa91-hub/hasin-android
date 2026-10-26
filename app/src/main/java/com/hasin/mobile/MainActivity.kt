@@ -11,13 +11,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.TrendingDown
+import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -132,17 +137,16 @@ fun DashboardScreen(viewModel: HasinViewModel, navController: NavController) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
-            // بطاقات الإحصائيات
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    StatCard("التطبيقات", "$total", Icons.Default.Apps, Color(0xFF42A5F5), Modifier.weight(1f))
-                    StatCard("متوسط الخطر", "${avg.toInt()}", Icons.Default.Speed, scoreColor(avg.toInt()), Modifier.weight(1f))
+                    StatCard("التطبيقات", "$total", Icons.Default.CheckCircle, Color(0xFF42A5F5), Modifier.weight(1f))
+                    StatCard("متوسط الخطر", "${avg.toInt()}", Icons.Default.Warning, scoreColor(avg.toInt()), Modifier.weight(1f))
                 }
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     StatCard("عالي", "$high", Icons.Default.Warning, Color(0xFFFF5252), Modifier.weight(1f))
-                    StatCard("متوسط", "$medium", Icons.Default.ErrorOutline, Color(0xFFFFD740), Modifier.weight(1f))
+                    StatCard("متوسط", "$medium", Icons.Default.CheckCircle, Color(0xFFFFD740), Modifier.weight(1f))
                     StatCard("منخفض", "$low", Icons.Default.CheckCircle, Color(0xFF69F0AE), Modifier.weight(1f))
                 }
             }
@@ -173,7 +177,7 @@ fun DashboardScreen(viewModel: HasinViewModel, navController: NavController) {
 }
 
 @Composable
-fun StatCard(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, modifier: Modifier = Modifier) {
+fun StatCard(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier = Modifier) {
     Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(icon, contentDescription = null, tint = color)
@@ -211,7 +215,7 @@ fun AppRow(app: ScannedAppEntity, onClick: () -> Unit) {
                 }
                 Text(app.packageName, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
-            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.rotation(180f))
         }
     }
 }
@@ -325,3 +329,6 @@ fun String.fromJson(): List<String> {
         emptyList()
     }
 }
+
+// Helper for rotation if needed, though standard icons should work now
+private fun Modifier.rotation(degrees: Float): Modifier = this.then(androidx.compose.ui.Modifier.rotate(degrees))
