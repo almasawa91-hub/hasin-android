@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -215,7 +216,12 @@ fun AppRow(app: ScannedAppEntity, onClick: () -> Unit) {
                 }
                 Text(app.packageName, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.rotation(180f))
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.rotate(180f)
+            )
         }
     }
 }
@@ -329,6 +335,3 @@ fun String.fromJson(): List<String> {
         emptyList()
     }
 }
-
-// Helper for rotation if needed, though standard icons should work now
-private fun Modifier.rotation(degrees: Float): Modifier = this.then(androidx.compose.ui.Modifier.rotate(degrees))
