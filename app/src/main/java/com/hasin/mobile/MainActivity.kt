@@ -118,16 +118,22 @@ fun DashboardScreen(viewModel: HasinViewModel, navController: NavController) {
     val medium by viewModel.mediumRiskCount.collectAsState()
     val low by viewModel.lowRiskCount.collectAsState()
     val worsened by viewModel.worsenedCount.collectAsState()
-    val scanning by viewModel.isScanning
+    
+    // التصحيح هنا: قراءة القيمة المباشرة بدلاً من استخدام by
+    val scanning = viewModel.isScanning
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("حصين", fontWeight = FontWeight.Bold) },
                 actions = {
+                    // الآن العامل ! سيعمل بشكل صحيح لأن scanning هو Boolean
                     IconButton(onClick = { viewModel.scan() }, enabled = !scanning) {
-                        if (scanning) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.Refresh, contentDescription = "إعادة فحص")
+                        if (scanning) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "إعادة فحص")
+                        }
                     }
                 }
             )
