@@ -14,7 +14,7 @@ import com.hasin.mobile.data.entity.NetworkConnectionEntity
 import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
+import kotlinx.coroutines.channels.Channel
 
 class HasinVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -46,7 +46,7 @@ class HasinVpnService : VpnService() {
             return START_NOT_STICKY
         }
 
-        startForeground(1, createNotification("جاري مراقبة وحماية حزم الشبكة محلياً..."))
+        startForeground(1, createNotification("جاري حماية الشبكة بأداء عالي..."))
         
         if (!isRunning) {
             startVpn()
@@ -95,37 +95,54 @@ class HasinVpnService : VpnService() {
         
         val db = HasinDatabase.getInstance(applicationContext)
         val dao = db.networkConnectionDao()
+        
+        // قناة غير حاجزة لإرسال التنبيهات لمعالجتها في الخلفية
+        val suspiciousChannel = Channel<NetworkConnectionEntity>(Channel.CONFLATED)
+        
+        // مهمة خلفية منفصلة لحفظ البيانات في قاعدة البيانات دون إبطاء الشبكة
+        scope.launch {
+            for (entity in suspiciousChannel) {
+                try {
+                    dao.insertConnection(entity)
+                } catch (e: Exception) {
+                    // تجاهل أخطاء قاعدة البيانات المؤقتة للحفاظ على استقرار الخدمة
+                }
+            }
+        }
 
         while (isRunning) {
             try {
                 val length = inputStream.read(packet)
                 if (length > 0) {
-                    // 1. تحليل الحزمة
-                    analyzeAndLog(packet, length, dao)
+                    // 1. تحليل سريع جداً (بدون عمليات إدخال/إخراج حاجزة)
+                    val threat = analyzePacketFast(packet, length)
                     
-                    // 2. إعادة توجيه الحزمة للحفاظ على اتصال الإنترنت
+                    if (threat != null) {
+                        // إرسال غير حاجز للقناة
+                        suspiciousChannel.trySend(threat)
+                    }
+                    
+                    // 2. إعادة توجيه الحزمة فوراً (بدون flush يدوي مدمر للأداء)
                     outputStream.write(packet, 0, length)
-                    outputStream.flush()
                 }
             } catch (e: Exception) {
                 if (isRunning) {
-                    delay(100) // منع استهلاك المعالج في حال حدوث خطأ مؤقت
+                    delay(50) // راحة قصيرة في حال حدوث خطأ مؤقت في الشبكة
                 }
             }
         }
     }
 
-    private suspend fun analyzeAndLog(packet: ByteArray, length: Int, dao: com.hasin.mobile.data.dao.NetworkConnectionDao) {
-        // التأكد من أن الحزمة طويلة بما يكفي لتكون حزمة IP (20 بايت كحد أدنى)
-        if (length < 20) return
+    private fun analyzePacketFast(packet: ByteArray, length: Int): NetworkConnectionEntity? {
+        // التحقق من أن الحزمة طويلة بما يكفي لتكون حزمة IP (20 بايت كحد أدنى)
+        if (length < 20) return null
         
-        val buffer = ByteBuffer.wrap(packet, 0, length)
-        val versionAndHeaderLength = buffer.get().toInt()
+        val versionAndHeaderLength = packet[0].toInt()
         val headerLength = (versionAndHeaderLength and 0x0F) * 4
         
-        if (headerLength < 20 || length < headerLength +4) return
+        if (headerLength < 20 || length < headerLength + 4) return null
 
-        val protocol = buffer.get(9).toInt() // 6 = TCP, 17 = UDP
+        val protocol = packet[9].toInt() // 6 = TCP, 17 = UDP
         
         // استخراج عنوان IP الوجهة (بايتات 16 إلى 19)
         val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
@@ -133,38 +150,20 @@ class HasinVpnService : VpnService() {
         // استخراج منفذ الوجهة (يأتي بعد رأس IP مباشرة)
         val destPort = ((packet[headerLength + 2].toInt() and 0xFF) shl 8) or (packet[headerLength + 3].toInt() and 0xFF)
 
-        // منطق الكشف عن التهديدات
-        val (isSuspicious, reason) = evaluateThreat(destIp, destPort)
-        
-        if (isSuspicious) {
-            val entity = NetworkConnectionEntity(
+        // منطق الكشف السريع عن التهديدات
+        val suspiciousPorts = listOf(4444, 5555, 6666, 31337, 12345, 8080, 8888)
+        if (destPort in suspiciousPorts) {
+            return NetworkConnectionEntity(
                 destIp = destIp,
                 destPort = destPort,
                 protocol = if (protocol == 6) "TCP" else "UDP",
                 timestamp = System.currentTimeMillis(),
                 isSuspicious = true,
-                reason = reason
+                reason = "منفذ شبكي مشبوه"
             )
-            dao.insertConnection(entity)
-        }
-    }
-
-    private fun evaluateThreat(destIp: String, destPort: Int): Pair<Boolean, String> {
-        // 1. فحص المنافذ المشبوهة المعروفة (أدوات اختراق، بروكسيات غير موثوقة)
-        val suspiciousPorts = listOf(4444, 5555, 6666, 31337, 12345, 8080, 8888)
-        if (destPort in suspiciousPorts) {
-            return true to "منفذ شبكي مشبوه أو غير قياسي"
         }
 
-        // 2. فحص عناوين IP الخاصة (Loopback / Local) التي تحاول التطبيقات الوصول إليها بشكل غير متوقع
-        if (destIp.startsWith("127.") || destIp.startsWith("192.168.") || destIp.startsWith("10.")) {
-            // هذا طبيعي في كثير من الأحيان، لكن يمكننا تسجيله إذا كان المنفذ غريباً
-            if (destPort in listOf(22, 23, 3389)) {
-                return true to "محاولة وصول لشبكة محلية عبر منفذ إدارة عن بعد"
-            }
-        }
-
-        return false to ""
+        return null
     }
 
     private fun stopVpn() {
