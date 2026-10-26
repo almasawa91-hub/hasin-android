@@ -1,8 +1,13 @@
 package com.hasin.mobile
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,11 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.TrendingDown
-import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,8 +36,10 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.hasin.mobile.core.network.HasinVpnService
 import com.hasin.mobile.data.AppScannerRepository
 import com.hasin.mobile.data.HasinDatabase
+import com.hasin.mobile.data.entity.NetworkConnectionEntity
 import com.hasin.mobile.data.entity.ScannedAppEntity
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -51,14 +54,17 @@ class HasinViewModel(private val repository: AppScannerRepository) : ViewModel()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
     val highRiskCount: StateFlow<Int> = repository.getHighRiskCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-    val mediumRiskCount: StateFlow<Int> = repository.getMediumRiskCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-    val lowRiskCount: StateFlow<Int> = repository.getLowRiskCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-    val worsenedCount: StateFlow<Int> = repository.getWorsenedCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    
+    val recentConnections: StateFlow<List<NetworkConnectionEntity>> = repository.getRecentConnections()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     var isScanning by mutableStateOf(false)
+        private set
+
+    private val _isVpnRunning = MutableStateFlow(false)
+    val isVpnRunning: StateFlow<Boolean> = _isVpnRunning
+
+    var vpnIntent by mutableStateOf<Intent?>(null)
         private set
 
     fun scan() {
@@ -67,6 +73,30 @@ class HasinViewModel(private val repository: AppScannerRepository) : ViewModel()
             repository.scanAllApps()
             isScanning = false
         }
+    }
+
+    fun requestVpnStart(context: Context) {
+        val intent = VpnService.prepare(context)
+        if (intent != null) {
+            vpnIntent = intent
+        } else {
+            confirmAndStartVpn(context)
+        }
+    }
+
+    fun confirmAndStartVpn(context: Context) {
+        HasinVpnService.startService(context)
+        _isVpnRunning.value = true
+        vpnIntent = null
+    }
+
+    fun stopVpn(context: Context) {
+        HasinVpnService.stopService(context)
+        _isVpnRunning.value = false
+    }
+
+    fun clearVpnIntent() {
+        vpnIntent = null
     }
 }
 
@@ -89,6 +119,12 @@ class MainActivity : ComponentActivity() {
                         }
                     )
 
+                    val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                        if (result.resultCode == Activity.RESULT_OK) {
+                            viewModel.confirmAndStartVpn(applicationContext)
+                        }
+                    }
+
                     LaunchedEffect(Unit) {
                         if (viewModel.totalCount.value == 0) viewModel.scan()
                     }
@@ -96,6 +132,13 @@ class MainActivity : ComponentActivity() {
                     NavHost(navController = navController, startDestination = "dashboard") {
                         composable("dashboard") {
                             DashboardScreen(viewModel, navController)
+                        }
+                        composable("network") {
+                            NetworkMonitorScreen(
+                                viewModel = viewModel,
+                                navController = navController,
+                                onVpnIntentReady = { intent -> vpnLauncher.launch(intent) }
+                            )
                         }
                         composable("details/{packageName}") { backStack ->
                             val pkg = backStack.arguments?.getString("packageName") ?: return@composable
@@ -111,73 +154,147 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(viewModel: HasinViewModel, navController: NavController) {
-    val apps by viewModel.apps.collectAsState()
     val total by viewModel.totalCount.collectAsState()
     val avg by viewModel.averageScore.collectAsState()
     val high by viewModel.highRiskCount.collectAsState()
-    val medium by viewModel.mediumRiskCount.collectAsState()
-    val low by viewModel.lowRiskCount.collectAsState()
-    val worsened by viewModel.worsenedCount.collectAsState()
-    
-    // التصحيح هنا: قراءة القيمة المباشرة بدلاً من استخدام by
-    val scanning = viewModel.isScanning
+    val scanning by viewModel.isScanning
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("حصين", fontWeight = FontWeight.Bold) },
                 actions = {
-                    // الآن العامل ! سيعمل بشكل صحيح لأن scanning هو Boolean
                     IconButton(onClick = { viewModel.scan() }, enabled = !scanning) {
-                        if (scanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        if (scanning) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.Refresh, contentDescription = "إعادة فحص")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatCard("التطبيقات", "$total", Icons.Default.CheckCircle, Color(0xFF42A5F5), Modifier.weight(1f))
+                StatCard("متوسط الخطر", "${avg.toInt()}", Icons.Default.Warning, scoreColor(avg.toInt()), Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable { navController.navigate("network") },
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF69F0AE).copy(alpha = 0.15f))
+            ) {
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF69F0AE), modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("مراقبة الشبكة المباشرة", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text("تحليل حزم البيانات محلياً للكشف عن الاتصالات المشبوهة", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.rotate(180f))
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text("أكثر التطبيقات خطورة", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Spacer(Modifier.height(8.dp))
+            
+            val apps by viewModel.apps.collectAsState()
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(apps.take(10)) { app ->
+                    AppRow(app) { navController.navigate("details/${app.packageName}") }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NetworkMonitorScreen(
+    viewModel: HasinViewModel, 
+    navController: NavController,
+    onVpnIntentReady: (Intent) -> Unit
+) {
+    val connections by viewModel.recentConnections.collectAsState()
+    val isVpnRunning by viewModel.isVpnRunning.collectAsState()
+    val vpnIntent = viewModel.vpnIntent
+
+    LaunchedEffect(vpnIntent) {
+        if (vpnIntent != null) {
+            onVpnIntentReady(vpnIntent)
+            viewModel.clearVpnIntent()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("مراقبة الشبكة", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = { navController.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { 
+                        if (isVpnRunning) viewModel.stopVpn(navController.context) 
+                        else viewModel.requestVpnStart(navController.context)
+                    }) {
+                        if (isVpnRunning) {
+                            Icon(Icons.Default.Stop, contentDescription = "إيقاف", tint = Color(0xFFFF5252))
                         } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "إعادة فحص")
+                            Icon(Icons.Default.PlayArrow, contentDescription = "بدء", tint = Color(0xFF69F0AE))
                         }
                     }
                 }
             )
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
-        ) {
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    StatCard("التطبيقات", "$total", Icons.Default.CheckCircle, Color(0xFF42A5F5), Modifier.weight(1f))
-                    StatCard("متوسط الخطر", "${avg.toInt()}", Icons.Default.Warning, scoreColor(avg.toInt()), Modifier.weight(1f))
-                }
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    StatCard("عالي", "$high", Icons.Default.Warning, Color(0xFFFF5252), Modifier.weight(1f))
-                    StatCard("متوسط", "$medium", Icons.Default.CheckCircle, Color(0xFFFFD740), Modifier.weight(1f))
-                    StatCard("منخفض", "$low", Icons.Default.CheckCircle, Color(0xFF69F0AE), Modifier.weight(1f))
-                }
-            }
-
-            if (worsened > 0) {
-                item {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFF5252).copy(alpha = 0.15f))
-                    ) {
-                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.TrendingUp, contentDescription = null, tint = Color(0xFFFF5252))
-                            Spacer(Modifier.width(8.dp))
-                            Text("تدهور في $worsened تطبيق منذ الفحص الأخير", color = Color(0xFFFF5252))
-                        }
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = if (isVpnRunning) Color(0xFF69F0AE).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isVpnRunning) Icons.Default.Shield else Icons.Default.ShieldOutlined,
+                        contentDescription = null,
+                        tint = if (isVpnRunning) Color(0xFF69F0AE) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(if (isVpnRunning) "المراقبة نشطة" else "المراقبة متوقفة", fontWeight = FontWeight.Bold)
+                        Text("تحليل حزم الشبكة محلياً للكشف عن الاتصالات المشبوهة", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
 
-            item {
-                Text("أكثر التطبيقات خطورة", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(top = 8.dp))
-            }
-
-            items(apps.take(50)) { app ->
-                AppRow(app) { navController.navigate("details/${app.packageName}") }
+            Text("آخر الاتصالات المشبوهة المسجلة", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+            
+            if (connections.isEmpty()) {
+                Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("لا توجد اتصالات مشبوهة مسجلة حتى الآن\n(جرب فتح تطبيقات أخرى أثناء تشغيل المراقبة)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(connections) { conn ->
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                            Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF5252))
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("${conn.destIp}:${conn.destPort}", fontWeight = FontWeight.Medium)
+                                    Text("${conn.protocol} • ${conn.reason}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(
+                                    text = formatTime(conn.timestamp),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -222,12 +339,7 @@ fun AppRow(app: ScannedAppEntity, onClick: () -> Unit) {
                 }
                 Text(app.packageName, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.rotate(180f)
-            )
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.rotate(180f))
         }
     }
 }
@@ -272,7 +384,6 @@ fun AppDetailsScreen(viewModel: HasinViewModel, packageName: String, navControll
                     }
                 }
             }
-
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -284,25 +395,15 @@ fun AppDetailsScreen(viewModel: HasinViewModel, packageName: String, navControll
                     }
                 }
             }
-
             val high = app.highRiskPermissions.fromJson()
             if (high.isNotEmpty()) {
-                item {
-                    Text("أذونات عالية الخطورة (${high.size})", fontWeight = FontWeight.Bold, color = Color(0xFFFF5252))
-                }
-                items(high) { perm ->
-                    PermissionChip(perm, Color(0xFFFF5252))
-                }
+                item { Text("أذونات عالية الخطورة (${high.size})", fontWeight = FontWeight.Bold, color = Color(0xFFFF5252)) }
+                items(high) { perm -> PermissionChip(perm, Color(0xFFFF5252)) }
             }
-
             val medium = app.mediumRiskPermissions.fromJson()
             if (medium.isNotEmpty()) {
-                item {
-                    Text("أذونات متوسطة الخطورة (${medium.size})", fontWeight = FontWeight.Bold, color = Color(0xFFFFD740))
-                }
-                items(medium) { perm ->
-                    PermissionChip(perm, Color(0xFFFFD740))
-                }
+                item { Text("أذونات متوسطة الخطورة (${medium.size})", fontWeight = FontWeight.Bold, color = Color(0xFFFFD740)) }
+                items(medium) { perm -> PermissionChip(perm, Color(0xFFFFD740)) }
             }
         }
     }
@@ -318,11 +419,7 @@ fun InfoRow(label: String, value: String) {
 
 @Composable
 fun PermissionChip(text: String, color: Color) {
-    Surface(
-        color = color.copy(alpha = 0.15f),
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier.padding(vertical = 2.dp)
-    ) {
+    Surface(color = color.copy(alpha = 0.15f), shape = MaterialTheme.shapes.small, modifier = Modifier.padding(vertical = 2.dp)) {
         Text(text, color = color, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
     }
 }
@@ -339,5 +436,14 @@ fun String.fromJson(): List<String> {
         (0 until arr.length()).map { arr.getString(it) }
     } catch (e: Exception) {
         emptyList()
+    }
+}
+
+fun formatTime(timestamp: Long): String {
+    val diff = System.currentTimeMillis() - timestamp
+    return when {
+        diff < 60000 -> "الآن"
+        diff < 3600000 -> "${diff / 60000} دقيقة"
+        else -> "${diff / 3600000} ساعة"
     }
 }
